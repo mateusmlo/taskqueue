@@ -818,7 +818,7 @@ func (x *FetchTaskResponse) GetHasTask() bool {
 type SubmitResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	Result        []byte                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`
+	Result        []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -975,7 +975,7 @@ const file_proto_taskqueue_proto_rawDesc = "" +
 	"\bhas_task\x18\x02 \x01(\bR\ahasTask\"F\n" +
 	"\x13SubmitResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
-	"\x06result\x18\x03 \x01(\fR\x06result\"0\n" +
+	"\x06result\x18\x02 \x01(\fR\x06result\"0\n" +
 	"\x14SubmitResultResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess*A\n" +
 	"\n" +
