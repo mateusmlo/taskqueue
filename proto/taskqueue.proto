@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package taskqueue;
+option go_package = "github.com/mateusmlo/taskqueue/proto";
+import "google/protobuf/timestamp.proto";
+
+// ============================================
+// ENUMS
+// ============================================
+enum TaskStatus {
+  PENDING = 0;
+  RUNNING = 1;
+  COMPLETED = 2;
+  FAILED = 3;
+}
+
+// ============================================
+// MESSAGES
+// ============================================
+message Task {
+  string id = 1;
+  string type = 2;
+  bytes payload = 3;
+  int32 priority = 4;
+  int32 max_retries = 5;
+  int32 retry_count = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  TaskStatus status = 10;
+}
+
+// ============================================
+// CLIENT RPCS (for submitting/querying tasks)
+// ============================================
+
+message SubmitTaskRequest {
+  string type = 1;
+  bytes payload = 2;
+  int32 priority = 3;
+  int32 max_retries = 4;
+}
+
+message SubmitTaskResponse {
+  string task_id = 1;
+}
+
+message GetTaskStatusRequest {
+  string task_id = 1;
+}
+
+message GetTaskStatusResponse {
+  TaskStatus status = 1;
+  string error = 2;
+}
+
+message GetTaskResultRequest {
+  string task_id = 1;
+}
+
+message GetTaskResultResponse {
+  Task task = 1;
+}
+
+// TODO: Define GetTaskStatusRequest and GetTaskStatusResponse
+
+// ============================================
+// WORKER RPCS
+// ============================================
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  repeated string task_types = 2;
+  int32 capacity = 3;
+  map<string, string> metadata = 4;
+}
+
+message RegisterWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  int32 current_load = 2;
+}
+
+message HeartbeatResponse {
+  bool success = 1;
+}
+
+message FetchTaskRequest {
+  string worker_id = 1;
+}
+
+message FetchTaskResponse {
+  Task task = 1;
+  bool has_task = 2;
+}
+
+message SubmitResultRequest {
+  string task_id = 1;
+  bool success = 2;
+  bytes result = 3;
+  string error = 4;
+}
+
+message SubmitResultResponse {
+  bool success = 1;
+}
+
+// ============================================
+// SERVICES
+// ============================================
+
+service TaskQueue {
+  // Client-facing RPCs
+  rpc SubmitTask(SubmitTaskRequest) returns (SubmitTaskResponse);
+  rpc GetTaskResult(GetTaskResultRequest) returns (GetTaskResultResponse);
+  rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
+}
+
+service WorkerService {
+  // Worker-facing RPCs
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc FetchTask(FetchTaskRequest) returns (FetchTaskResponse);
+  rpc SubmitResult(SubmitResultRequest) returns (SubmitResultResponse);
+}
