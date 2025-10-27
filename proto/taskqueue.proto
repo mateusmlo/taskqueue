@@ -90,6 +90,7 @@ message HeartbeatResponse {
 
 message FetchTaskRequest {
   string worker_id = 1;
+  repeated string task_types = 2;
 }
 
 message FetchTaskResponse {
@@ -99,9 +100,7 @@ message FetchTaskResponse {
 
 message SubmitResultRequest {
   string task_id = 1;
-  bool success = 2;
   bytes result = 3;
-  string error = 4;
 }
 
 message SubmitResultResponse {
@@ -124,4 +123,5 @@ service WorkerService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
   rpc FetchTask(FetchTaskRequest) returns (FetchTaskResponse);
   rpc SubmitResult(SubmitResultRequest) returns (SubmitResultResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
