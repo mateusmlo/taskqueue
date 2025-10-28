@@ -98,8 +98,8 @@ message FetchTaskResponse {
 
 message SubmitResultRequest {
   string task_id = 1;
-  bool success = 2;
-  bytes result = 3;
+  bytes result = 2; 
+  string error = 3;  
 }
 
 message SubmitResultResponse {
