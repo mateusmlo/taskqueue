@@ -819,6 +819,7 @@ type SubmitResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	Result        []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -865,6 +866,13 @@ func (x *SubmitResultRequest) GetResult() []byte {
 		return x.Result
 	}
 	return nil
+}
+
+func (x *SubmitResultRequest) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
 }
 
 type SubmitResultResponse struct {
@@ -972,10 +980,11 @@ const file_proto_taskqueue_proto_rawDesc = "" +
 	"task_types\x18\x02 \x03(\tR\ttaskTypes\"S\n" +
 	"\x11FetchTaskResponse\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.taskqueue.TaskR\x04task\x12\x19\n" +
-	"\bhas_task\x18\x02 \x01(\bR\ahasTask\"F\n" +
+	"\bhas_task\x18\x02 \x01(\bR\ahasTask\"\\\n" +
 	"\x13SubmitResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
-	"\x06result\x18\x02 \x01(\fR\x06result\"0\n" +
+	"\x06result\x18\x02 \x01(\fR\x06result\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"0\n" +
 	"\x14SubmitResultResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess*A\n" +
 	"\n" +
