@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/mateusmlo/taskqueue/proto"
 )
@@ -83,6 +84,30 @@ func NewServer() *Server {
 	}
 }
 
+// toProtoTask converts internal Task to proto.Task
+func (t *Task) toProtoTask() *proto.Task {
+	protoTask := &proto.Task{
+		Id:         t.ID,
+		Type:       t.Type,
+		Payload:    t.Payload,
+		Priority:   proto.Priority(t.Priority),
+		MaxRetries: int32(t.MaxRetries),
+		RetryCount: int32(t.RetryCount),
+		CreatedAt:  timestamppb.New(t.CreatedAt),
+		Status:     proto.TaskStatus(t.Status),
+	}
+
+	// Handle optional timestamp fields
+	if t.StartedAt != nil {
+		protoTask.StartedAt = timestamppb.New(*t.StartedAt)
+	}
+	if t.CompletedAt != nil {
+		protoTask.CompletedAt = timestamppb.New(*t.CompletedAt)
+	}
+
+	return protoTask
+}
+
 func (s *Server) SubmitTask(ctx context.Context, req *proto.SubmitTaskRequest) (*proto.SubmitTaskResponse, error) {
 	uuid, err := uuid.NewV7()
 	if err != nil {
@@ -124,4 +149,20 @@ func (s *Server) GetTaskStatus(ctx context.Context, req *proto.GetTaskStatusRequ
 	}
 
 	return &proto.GetTaskStatusResponse{Status: proto.TaskStatus(task.Status)}, nil
+}
+
+func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequest) (*proto.GetTaskResultResponse, error) {
+	s.tasksMux.RLock()
+	defer s.tasksMux.RUnlock()
+
+	task, exists := s.tasks[req.TaskId]
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
+	}
+
+	if task.Status != COMPLETED {
+		return nil, status.Errorf(codes.FailedPrecondition, "task %s not completed yet", req.TaskId)
+	}
+
+	return &proto.GetTaskResultResponse{Task: task.toProtoTask()}, nil
 }
