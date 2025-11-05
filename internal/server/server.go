@@ -1,4 +1,4 @@
-package internal
+package server
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/mateusmlo/taskqueue/internal/worker"
 	"github.com/mateusmlo/taskqueue/proto"
 )
 
@@ -36,7 +37,7 @@ type Server struct {
 	pendingQueues map[Priority][]*Task
 	queuesMux     sync.RWMutex
 
-	workers    map[string]*Worker
+	workers    map[string]*worker.Worker
 	workersMux sync.RWMutex
 
 	ctx    context.Context
@@ -62,23 +63,13 @@ type Task struct {
 	WorkerID    string
 }
 
-type Worker struct {
-	ID            string
-	Address       string
-	RegisteredAt  time.Time
-	LastHeartbeat time.Time
-	TaskTypes     []string
-	Capacity      int
-	CurrentLoad   int
-}
-
 func NewServer() *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Server{
 		tasks:         make(map[string]*Task),
 		pendingQueues: make(map[Priority][]*Task),
-		workers:       make(map[string]*Worker),
+		workers:       make(map[string]*worker.Worker),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -165,4 +156,24 @@ func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequ
 	}
 
 	return &proto.GetTaskResultResponse{Task: task.toProtoTask()}, nil
+}
+
+func (s *Server) RegisterWorker(ctx context.Context, req *proto.RegisterWorkerRequest) (*proto.RegisterWorkerResponse, error) {
+	uuid, err := uuid.NewV7()
+	if err != nil {
+		return &proto.RegisterWorkerResponse{Success: false}, err
+	}
+
+	var newWorker worker.Worker
+	newWorker.FromProtoWorker(req.Worker)
+
+	workerID := uuid.String()
+	newWorker.ID = workerID
+
+	s.workersMux.Lock()
+	defer s.workersMux.Unlock()
+
+	s.workers[workerID] = &newWorker
+
+	return &proto.RegisterWorkerResponse{WorkerId: workerID, Success: true}, nil
 }
