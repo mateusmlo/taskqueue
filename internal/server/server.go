@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	FAILED
 )
 
+// Server struct implements the TaskQueue and WorkerService gRPC servers
 type Server struct {
 	tasks    map[string]*Task
 	tasksMux sync.RWMutex
@@ -47,6 +49,7 @@ type Server struct {
 	proto.UnimplementedWorkerServiceServer
 }
 
+// Task represents a unit of work in the task queue system
 type Task struct {
 	ID          string
 	Type        string
@@ -63,6 +66,7 @@ type Task struct {
 	WorkerID    string
 }
 
+// NewServer initializes and returns a new Server instance
 func NewServer() *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -99,6 +103,7 @@ func (t *Task) toProtoTask() *proto.Task {
 	return protoTask
 }
 
+// SubmitTask handles task submission requests
 func (s *Server) SubmitTask(ctx context.Context, req *proto.SubmitTaskRequest) (*proto.SubmitTaskResponse, error) {
 	uuid, err := uuid.NewV7()
 	if err != nil {
@@ -122,33 +127,26 @@ func (s *Server) SubmitTask(ctx context.Context, req *proto.SubmitTaskRequest) (
 
 	s.tasks[taskID] = newTask
 
-	s.queuesMux.Lock()
-	defer s.queuesMux.Unlock()
-
-	s.pendingQueues[newTask.Priority] = append(s.pendingQueues[newTask.Priority], newTask)
+	s.appendTaskToQueue(newTask)
 
 	return &proto.SubmitTaskResponse{TaskId: newTask.ID}, nil
 }
 
+// GetTaskStatus retrieves the status of a task by its ID
 func (s *Server) GetTaskStatus(ctx context.Context, req *proto.GetTaskStatusRequest) (*proto.GetTaskStatusResponse, error) {
-	s.tasksMux.RLock()
-	defer s.tasksMux.RUnlock()
-
-	task, exists := s.tasks[req.TaskId]
-	if !exists {
-		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
+	task, err := s.findTask(req.TaskId)
+	if err != nil {
+		return nil, err
 	}
 
 	return &proto.GetTaskStatusResponse{Status: proto.TaskStatus(task.Status)}, nil
 }
 
+// GetTaskResult retrieves the result of a completed task by its ID
 func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequest) (*proto.GetTaskResultResponse, error) {
-	s.tasksMux.RLock()
-	defer s.tasksMux.RUnlock()
-
-	task, exists := s.tasks[req.TaskId]
-	if !exists {
-		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
+	task, err := s.findTask(req.TaskId)
+	if err != nil {
+		return nil, err
 	}
 
 	if task.Status != COMPLETED {
@@ -158,22 +156,158 @@ func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequ
 	return &proto.GetTaskResultResponse{Task: task.toProtoTask()}, nil
 }
 
+// RegisterWorker handles worker registration requests
 func (s *Server) RegisterWorker(ctx context.Context, req *proto.RegisterWorkerRequest) (*proto.RegisterWorkerResponse, error) {
-	uuid, err := uuid.NewV7()
-	if err != nil {
-		return &proto.RegisterWorkerResponse{Success: false}, err
-	}
-
 	var newWorker worker.Worker
 	newWorker.FromProtoWorker(req.Worker)
-
-	workerID := uuid.String()
-	newWorker.ID = workerID
 
 	s.workersMux.Lock()
 	defer s.workersMux.Unlock()
 
-	s.workers[workerID] = &newWorker
+	s.workers[newWorker.ID] = &newWorker
 
-	return &proto.RegisterWorkerResponse{WorkerId: workerID, Success: true}, nil
+	return &proto.RegisterWorkerResponse{WorkerId: newWorker.ID, Success: true}, nil
+}
+
+// Heartbeat processes heartbeat messages from workers
+func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*proto.HeartbeatResponse, error) {
+	worker, err := s.findWorker(req.WorkerId)
+	if err != nil {
+		return nil, err
+	}
+
+	worker.LastHeartbeat = time.Now()
+	worker.CurrentLoad = int(req.CurrentLoad)
+
+	return &proto.HeartbeatResponse{Success: true, CurrentLoad: int32(worker.CurrentLoad)}, nil
+}
+
+// SubmitResult processes the result submission from workers
+func (s *Server) SubmitResult(ctx context.Context, req *proto.SubmitResultRequest) (*proto.SubmitResultResponse, error) {
+	task, err := s.findTask(req.TaskId)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	task.CompletedAt = &now
+
+	defer s.decrementCurrentLoad(task.WorkerID)
+
+	if req.Error != "" {
+		task.Error = req.Error
+		task.RetryCount++
+
+		if task.RetryCount < task.MaxRetries {
+			task.Status = PENDING
+			task.StartedAt = nil
+			task.CompletedAt = nil
+
+			s.appendTaskToQueue(task)
+		} else {
+			task.Status = FAILED
+
+			return nil, status.Errorf(codes.DeadlineExceeded, "task %s failed after maximum retries: %s", req.TaskId, req.Error)
+		}
+	} else {
+		task.Status = COMPLETED
+		task.Result = req.Result
+	}
+
+	return &proto.SubmitResultResponse{Success: true, Result: req.Result}, nil
+}
+
+func (s *Server) FetchTask(ctx context.Context, req *proto.FetchTaskRequest) (*proto.FetchTaskResponse, error) {
+	worker, err := s.findWorker(req.WorkerId)
+	if err != nil {
+		return nil, err
+	}
+
+	if worker.CurrentLoad >= worker.Capacity {
+		return &proto.FetchTaskResponse{HasTask: false}, nil
+	}
+
+	s.queuesMux.Lock()
+	defer s.queuesMux.Unlock()
+
+	for priority := HIGH; priority <= LOW; priority++ {
+		queue := s.pendingQueues[priority]
+		for i, task := range queue {
+			if slices.Contains(req.TaskTypes, task.Type) {
+				// Remove task from queue
+				s.pendingQueues[priority] = append(queue[:i], queue[i+1:]...)
+
+				// Update task status
+				now := time.Now()
+
+				s.tasksMux.Lock()
+				task.Status = RUNNING
+				task.StartedAt = &now
+				task.WorkerID = worker.ID
+				s.tasksMux.Unlock()
+
+				s.incrementCurrentLoad(worker.ID)
+
+				return &proto.FetchTaskResponse{Task: task.toProtoTask(), HasTask: true}, nil
+			}
+		}
+	}
+
+	return &proto.FetchTaskResponse{HasTask: false}, nil
+}
+
+// Util functions
+
+// appendTaskToQueue appends a task back to the pending queue based on its priority
+func (s *Server) appendTaskToQueue(task *Task) {
+	s.queuesMux.Lock()
+	defer s.queuesMux.Unlock()
+
+	s.pendingQueues[task.Priority] = append(s.pendingQueues[task.Priority], task)
+}
+
+// decrementCurrentLoad decreases the current load of the specified worker
+func (s *Server) decrementCurrentLoad(workerID string) {
+	s.workersMux.Lock()
+	defer s.workersMux.Unlock()
+
+	if worker, exists := s.workers[workerID]; exists {
+		worker.CurrentLoad--
+	}
+}
+
+// incrementCurrentLoad increases the current load of the specified worker
+func (s *Server) incrementCurrentLoad(workerID string) {
+	s.workersMux.Lock()
+	defer s.workersMux.Unlock()
+
+	if worker, exists := s.workers[workerID]; exists {
+		worker.CurrentLoad++
+	}
+}
+
+// findTask retrieves a task by its ID, returning an error if not found
+func (s *Server) findTask(taskID string) (*Task, error) {
+	s.tasksMux.RLock()
+	defer s.tasksMux.RUnlock()
+
+	task, exists := s.tasks[taskID]
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "task %s not found", taskID)
+	}
+
+	return task, nil
+}
+
+// findWorker retrieves a worker by its ID, returning an error if not found
+func (s *Server) findWorker(workerID string) (*worker.Worker, error) {
+	s.workersMux.RLock()
+	defer s.workersMux.RUnlock()
+
+	worker, exists := s.workers[workerID]
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "worker %s not registered", workerID)
+	}
+
+	return worker, nil
 }

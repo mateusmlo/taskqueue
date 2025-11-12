@@ -779,6 +779,7 @@ func (x *HeartbeatRequest) GetCurrentLoad() int32 {
 type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	CurrentLoad   int32                  `protobuf:"varint,2,opt,name=current_load,json=currentLoad,proto3" json:"current_load,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -818,6 +819,13 @@ func (x *HeartbeatResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+func (x *HeartbeatResponse) GetCurrentLoad() int32 {
+	if x != nil {
+		return x.CurrentLoad
+	}
+	return 0
 }
 
 type FetchTaskRequest struct {
@@ -928,7 +936,7 @@ type SubmitResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	Result        []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
-	Error         *string                `protobuf:"bytes,3,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -978,8 +986,8 @@ func (x *SubmitResultRequest) GetResult() []byte {
 }
 
 func (x *SubmitResultRequest) GetError() string {
-	if x != nil && x.Error != nil {
-		return *x.Error
+	if x != nil {
+		return x.Error
 	}
 	return ""
 }
@@ -987,6 +995,8 @@ func (x *SubmitResultRequest) GetError() string {
 type SubmitResultResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Result        []byte                 `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1026,6 +1036,20 @@ func (x *SubmitResultResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+func (x *SubmitResultResponse) GetResult() []byte {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *SubmitResultResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
 }
 
 var File_proto_taskqueue_proto protoreflect.FileDescriptor
@@ -1086,23 +1110,25 @@ const file_proto_taskqueue_proto_rawDesc = "" +
 	"\tworker_id\x18\x02 \x01(\tR\bworkerId\"R\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12!\n" +
-	"\fcurrent_load\x18\x02 \x01(\x05R\vcurrentLoad\"-\n" +
+	"\fcurrent_load\x18\x02 \x01(\x05R\vcurrentLoad\"P\n" +
 	"\x11HeartbeatResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\"N\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12!\n" +
+	"\fcurrent_load\x18\x02 \x01(\x05R\vcurrentLoad\"N\n" +
 	"\x10FetchTaskRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1d\n" +
 	"\n" +
 	"task_types\x18\x02 \x03(\tR\ttaskTypes\"S\n" +
 	"\x11FetchTaskResponse\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.taskqueue.TaskR\x04task\x12\x19\n" +
-	"\bhas_task\x18\x02 \x01(\bR\ahasTask\"k\n" +
+	"\bhas_task\x18\x02 \x01(\bR\ahasTask\"\\\n" +
 	"\x13SubmitResultRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
-	"\x06result\x18\x02 \x01(\fR\x06result\x12\x19\n" +
-	"\x05error\x18\x03 \x01(\tH\x00R\x05error\x88\x01\x01B\b\n" +
-	"\x06_error\"0\n" +
+	"\x06result\x18\x02 \x01(\fR\x06result\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"^\n" +
 	"\x14SubmitResultResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess*A\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x16\n" +
+	"\x06result\x18\x02 \x01(\fR\x06result\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error*A\n" +
 	"\n" +
 	"TaskStatus\x12\v\n" +
 	"\aPENDING\x10\x00\x12\v\n" +
@@ -1200,7 +1226,6 @@ func file_proto_taskqueue_proto_init() {
 		return
 	}
 	file_proto_taskqueue_proto_msgTypes[0].OneofWrappers = []any{}
-	file_proto_taskqueue_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

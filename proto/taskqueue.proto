@@ -96,6 +96,7 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
   bool success = 1;
+  int32 current_load = 2;
 }
 
 message FetchTaskRequest {
@@ -111,11 +112,13 @@ message FetchTaskResponse {
 message SubmitResultRequest {
   string task_id = 1;
   bytes result = 2;
-  optional string error = 3;
+  string error = 3;
 }
 
 message SubmitResultResponse {
   bool success = 1;
+  bytes result = 2;
+  string error = 4;
 }
 
 // ============================================

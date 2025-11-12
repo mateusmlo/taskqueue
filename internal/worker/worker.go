@@ -3,7 +3,10 @@ package worker
 import (
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mateusmlo/taskqueue/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Worker struct {
@@ -17,12 +20,21 @@ type Worker struct {
 	Metadata      map[string]string
 }
 
-func (w *Worker) FromProtoWorker(pw *proto.Worker) {
-	w.ID = pw.WorkerId
+// FromProtoWorker initializes a Worker instance from a proto.Worker message (server generates ID)
+func (w *Worker) FromProtoWorker(pw *proto.Worker) error {
+	uuid, err := uuid.NewV7()
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to generate worker UUID: %v", err)
+	}
+
+	w.ID = uuid.String()
 	w.TaskTypes = pw.TaskTypes
 	w.Address = pw.Metadata["address"]
 	w.Capacity = int(pw.Capacity)
-	w.LastHeartbeat = time.UnixMilli(int64(pw.LastHeartbeat))
-	w.CurrentLoad = int(pw.Capacity)
+	w.CurrentLoad = 0
 	w.Metadata = pw.Metadata
+	w.RegisteredAt = time.Now()
+	w.LastHeartbeat = time.Now()
+
+	return nil
 }
