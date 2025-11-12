@@ -1,10 +1,11 @@
-package internal
+package server
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/mateusmlo/taskqueue/internal/worker"
 	"github.com/mateusmlo/taskqueue/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -585,5 +586,826 @@ func TestServer_ConcurrentGetTaskStatus(t *testing.T) {
 		if err := <-errors; err != nil {
 			t.Errorf("Concurrent GetTaskStatus failed: %v", err)
 		}
+	}
+}
+
+func TestServer_RegisterWorker(t *testing.T) {
+	s := NewServer()
+	defer s.cancel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		worker  *proto.Worker
+		wantErr bool
+	}{
+		{
+			name: "valid worker registration",
+			worker: &proto.Worker{
+				TaskTypes: []string{"image-processing", "data-export"},
+				Capacity:  10,
+				Metadata: map[string]string{
+					"address": "localhost:8080",
+					"region":  "us-west-1",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "worker with single task type",
+			worker: &proto.Worker{
+				TaskTypes: []string{"email-send"},
+				Capacity:  5,
+				Metadata: map[string]string{
+					"address": "localhost:8081",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "worker with high capacity",
+			worker: &proto.Worker{
+				TaskTypes: []string{"batch-job", "report-gen"},
+				Capacity:  100,
+				Metadata: map[string]string{
+					"address": "localhost:8082",
+					"type":    "high-capacity",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &proto.RegisterWorkerRequest{
+				Worker: tt.worker,
+			}
+
+			resp, err := s.RegisterWorker(ctx, req)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RegisterWorker() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if resp == nil {
+					t.Fatal("RegisterWorker() returned nil response")
+				}
+
+				if !resp.Success {
+					t.Error("RegisterWorker() success = false, want true")
+				}
+
+				if resp.WorkerId == "" {
+					t.Error("RegisterWorker() returned empty worker ID")
+				}
+
+				// Verify worker was stored
+				s.workersMux.RLock()
+				worker, exists := s.workers[resp.WorkerId]
+				s.workersMux.RUnlock()
+
+				if !exists {
+					t.Error("Worker was not stored in server.workers")
+				}
+
+				if worker.ID != resp.WorkerId {
+					t.Errorf("Worker.ID = %v, want %v", worker.ID, resp.WorkerId)
+				}
+
+				if worker.Capacity != int(tt.worker.Capacity) {
+					t.Errorf("Worker.Capacity = %v, want %v", worker.Capacity, tt.worker.Capacity)
+				}
+
+				if worker.CurrentLoad != 0 {
+					t.Errorf("Worker.CurrentLoad = %v, want 0", worker.CurrentLoad)
+				}
+
+				if len(worker.TaskTypes) != len(tt.worker.TaskTypes) {
+					t.Errorf("Worker.TaskTypes length = %v, want %v", len(worker.TaskTypes), len(tt.worker.TaskTypes))
+				}
+			}
+		})
+	}
+}
+
+func TestServer_Heartbeat(t *testing.T) {
+	s := NewServer()
+	defer s.cancel()
+	ctx := context.Background()
+
+	// Register a worker first
+	registerReq := &proto.RegisterWorkerRequest{
+		Worker: &proto.Worker{
+			TaskTypes: []string{"test-task"},
+			Capacity:  10,
+			Metadata: map[string]string{
+				"address": "localhost:8080",
+			},
+		},
+	}
+	registerResp, err := s.RegisterWorker(ctx, registerReq)
+	if err != nil {
+		t.Fatalf("Failed to register worker: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		workerID    string
+		currentLoad int32
+		wantErr     bool
+		wantCode    codes.Code
+	}{
+		{
+			name:        "valid heartbeat",
+			workerID:    registerResp.WorkerId,
+			currentLoad: 5,
+			wantErr:     false,
+		},
+		{
+			name:        "heartbeat with zero load",
+			workerID:    registerResp.WorkerId,
+			currentLoad: 0,
+			wantErr:     false,
+		},
+		{
+			name:        "heartbeat with max load",
+			workerID:    registerResp.WorkerId,
+			currentLoad: 10,
+			wantErr:     false,
+		},
+		{
+			name:        "heartbeat from non-existent worker",
+			workerID:    "non-existent-worker",
+			currentLoad: 3,
+			wantErr:     true,
+			wantCode:    codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Record time before heartbeat
+			timeBefore := time.Now()
+
+			req := &proto.HeartbeatRequest{
+				WorkerId:    tt.workerID,
+				CurrentLoad: tt.currentLoad,
+			}
+
+			resp, err := s.Heartbeat(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Heartbeat() expected error, got nil")
+					return
+				}
+
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Error("Error is not a gRPC status error")
+					return
+				}
+
+				if st.Code() != tt.wantCode {
+					t.Errorf("Heartbeat() error code = %v, want %v", st.Code(), tt.wantCode)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Heartbeat() unexpected error = %v", err)
+					return
+				}
+
+				if resp == nil {
+					t.Fatal("Heartbeat() returned nil response")
+				}
+
+				if !resp.Success {
+					t.Error("Heartbeat() success = false, want true")
+				}
+
+				if resp.CurrentLoad != tt.currentLoad {
+					t.Errorf("Heartbeat() current_load = %v, want %v", resp.CurrentLoad, tt.currentLoad)
+				}
+
+				// Verify worker's last heartbeat was updated
+				s.workersMux.RLock()
+				worker := s.workers[tt.workerID]
+				s.workersMux.RUnlock()
+
+				if worker.LastHeartbeat.Before(timeBefore) {
+					t.Error("Worker's LastHeartbeat was not updated")
+				}
+
+				if worker.CurrentLoad != int(tt.currentLoad) {
+					t.Errorf("Worker.CurrentLoad = %v, want %v", worker.CurrentLoad, tt.currentLoad)
+				}
+			}
+		})
+	}
+}
+
+func TestServer_FetchTask(t *testing.T) {
+	s := NewServer()
+	defer s.cancel()
+	ctx := context.Background()
+
+	// Register a worker
+	registerReq := &proto.RegisterWorkerRequest{
+		Worker: &proto.Worker{
+			TaskTypes: []string{"image-processing", "data-export"},
+			Capacity:  10,
+			Metadata: map[string]string{
+				"address": "localhost:8080",
+			},
+		},
+	}
+	registerResp, err := s.RegisterWorker(ctx, registerReq)
+	if err != nil {
+		t.Fatalf("Failed to register worker: %v", err)
+	}
+
+	// Submit tasks with different priorities
+	highPriorityTask, _ := s.SubmitTask(ctx, &proto.SubmitTaskRequest{
+		Type:       "image-processing",
+		Payload:    []byte("high priority"),
+		Priority:   int32(proto.Priority_HIGH),
+		MaxRetries: 3,
+	})
+
+	mediumPriorityTask, _ := s.SubmitTask(ctx, &proto.SubmitTaskRequest{
+		Type:       "data-export",
+		Payload:    []byte("medium priority"),
+		Priority:   int32(proto.Priority_MEDIUM),
+		MaxRetries: 3,
+	})
+
+	lowPriorityTask, _ := s.SubmitTask(ctx, &proto.SubmitTaskRequest{
+		Type:       "image-processing",
+		Payload:    []byte("low priority"),
+		Priority:   int32(proto.Priority_LOW),
+		MaxRetries: 3,
+	})
+
+	tests := []struct {
+		name        string
+		workerID    string
+		taskTypes   []string
+		wantHasTask bool
+		wantTaskID  string
+		wantErr     bool
+		wantCode    codes.Code
+		setupFunc   func()
+	}{
+		{
+			name:        "fetch high priority task",
+			workerID:    registerResp.WorkerId,
+			taskTypes:   []string{"image-processing", "data-export"},
+			wantHasTask: true,
+			wantTaskID:  highPriorityTask.TaskId,
+			wantErr:     false,
+		},
+		{
+			name:        "fetch medium priority task after high priority consumed",
+			workerID:    registerResp.WorkerId,
+			taskTypes:   []string{"data-export"},
+			wantHasTask: true,
+			wantTaskID:  mediumPriorityTask.TaskId,
+			wantErr:     false,
+		},
+		{
+			name:        "fetch low priority task",
+			workerID:    registerResp.WorkerId,
+			taskTypes:   []string{"image-processing"},
+			wantHasTask: true,
+			wantTaskID:  lowPriorityTask.TaskId,
+			wantErr:     false,
+		},
+		{
+			name:        "no tasks available for worker task types",
+			workerID:    registerResp.WorkerId,
+			taskTypes:   []string{"email-send"},
+			wantHasTask: false,
+			wantErr:     false,
+		},
+		{
+			name:        "worker not found",
+			workerID:    "non-existent-worker",
+			taskTypes:   []string{"image-processing"},
+			wantHasTask: false,
+			wantErr:     true,
+			wantCode:    codes.NotFound,
+		},
+		{
+			name:        "worker at capacity cannot fetch tasks",
+			workerID:    registerResp.WorkerId,
+			taskTypes:   []string{"image-processing"},
+			wantHasTask: false,
+			wantErr:     false,
+			setupFunc: func() {
+				// Set worker to full capacity
+				s.workersMux.Lock()
+				s.workers[registerResp.WorkerId].CurrentLoad = 10
+				s.workersMux.Unlock()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setupFunc != nil {
+				tt.setupFunc()
+			}
+
+			req := &proto.FetchTaskRequest{
+				WorkerId:  tt.workerID,
+				TaskTypes: tt.taskTypes,
+			}
+
+			resp, err := s.FetchTask(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("FetchTask() expected error, got nil")
+					return
+				}
+
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Error("Error is not a gRPC status error")
+					return
+				}
+
+				if st.Code() != tt.wantCode {
+					t.Errorf("FetchTask() error code = %v, want %v", st.Code(), tt.wantCode)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("FetchTask() unexpected error = %v", err)
+					return
+				}
+
+				if resp == nil {
+					t.Fatal("FetchTask() returned nil response")
+				}
+
+				if resp.HasTask != tt.wantHasTask {
+					t.Errorf("FetchTask() has_task = %v, want %v", resp.HasTask, tt.wantHasTask)
+				}
+
+				if tt.wantHasTask {
+					if resp.Task == nil {
+						t.Fatal("FetchTask() returned nil task when has_task is true")
+					}
+
+					if resp.Task.Id != tt.wantTaskID {
+						t.Errorf("FetchTask() task ID = %v, want %v", resp.Task.Id, tt.wantTaskID)
+					}
+
+					// Verify task status was updated to RUNNING
+					s.tasksMux.RLock()
+					task := s.tasks[resp.Task.Id]
+					s.tasksMux.RUnlock()
+
+					if task.Status != RUNNING {
+						t.Errorf("Task status = %v, want RUNNING", task.Status)
+					}
+
+					if task.StartedAt == nil {
+						t.Error("Task.StartedAt is nil")
+					}
+
+					if task.WorkerID != tt.workerID {
+						t.Errorf("Task.WorkerID = %v, want %v", task.WorkerID, tt.workerID)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestServer_SubmitResult(t *testing.T) {
+	s := NewServer()
+	defer s.cancel()
+	ctx := context.Background()
+
+	// Register a worker
+	registerReq := &proto.RegisterWorkerRequest{
+		Worker: &proto.Worker{
+			TaskTypes: []string{"test-task"},
+			Capacity:  10,
+			Metadata: map[string]string{
+				"address": "localhost:8080",
+			},
+		},
+	}
+	registerResp, err := s.RegisterWorker(ctx, registerReq)
+	if err != nil {
+		t.Fatalf("Failed to register worker: %v", err)
+	}
+
+	// Submit and fetch a task for success test
+	submitReq := &proto.SubmitTaskRequest{
+		Type:       "test-task",
+		Payload:    []byte("test"),
+		Priority:   int32(proto.Priority_HIGH),
+		MaxRetries: 3,
+	}
+	submitResp, _ := s.SubmitTask(ctx, submitReq)
+
+	fetchReq := &proto.FetchTaskRequest{
+		WorkerId:  registerResp.WorkerId,
+		TaskTypes: []string{"test-task"},
+	}
+	s.FetchTask(ctx, fetchReq)
+
+	// Submit another task for retry test
+	retryTaskResp, _ := s.SubmitTask(ctx, &proto.SubmitTaskRequest{
+		Type:       "test-task",
+		Payload:    []byte("retry test"),
+		Priority:   int32(proto.Priority_HIGH),
+		MaxRetries: 3,
+	})
+	s.FetchTask(ctx, fetchReq)
+
+	// Submit task for max retries test
+	maxRetriesTaskResp, _ := s.SubmitTask(ctx, &proto.SubmitTaskRequest{
+		Type:       "test-task",
+		Payload:    []byte("max retries test"),
+		Priority:   int32(proto.Priority_HIGH),
+		MaxRetries: 2,
+	})
+	s.FetchTask(ctx, fetchReq)
+
+	// Manually set retry count to simulate previous failures
+	s.tasksMux.Lock()
+	s.tasks[maxRetriesTaskResp.TaskId].RetryCount = 1
+	s.tasksMux.Unlock()
+
+	tests := []struct {
+		name     string
+		taskID   string
+		result   []byte
+		error    string
+		wantErr  bool
+		wantCode codes.Code
+		verify   func(t *testing.T, taskID string)
+	}{
+		{
+			name:    "successful task completion",
+			taskID:  submitResp.TaskId,
+			result:  []byte("success result"),
+			error:   "",
+			wantErr: false,
+			verify: func(t *testing.T, taskID string) {
+				s.tasksMux.RLock()
+				task := s.tasks[taskID]
+				s.tasksMux.RUnlock()
+
+				if task.Status != COMPLETED {
+					t.Errorf("Task status = %v, want COMPLETED", task.Status)
+				}
+
+				if string(task.Result) != "success result" {
+					t.Errorf("Task result = %v, want 'success result'", string(task.Result))
+				}
+
+				if task.CompletedAt == nil {
+					t.Error("Task.CompletedAt is nil")
+				}
+
+				if task.Error != "" {
+					t.Errorf("Task.Error = %v, want empty string", task.Error)
+				}
+			},
+		},
+		{
+			name:    "task failure with retry available",
+			taskID:  retryTaskResp.TaskId,
+			result:  nil,
+			error:   "processing failed",
+			wantErr: false,
+			verify: func(t *testing.T, taskID string) {
+				s.tasksMux.RLock()
+				task := s.tasks[taskID]
+				s.tasksMux.RUnlock()
+
+				if task.Status != PENDING {
+					t.Errorf("Task status = %v, want PENDING (for retry)", task.Status)
+				}
+
+				if task.RetryCount != 1 {
+					t.Errorf("Task retry count = %v, want 1", task.RetryCount)
+				}
+
+				if task.Error != "processing failed" {
+					t.Errorf("Task error = %v, want 'processing failed'", task.Error)
+				}
+
+				if task.StartedAt != nil {
+					t.Error("Task.StartedAt should be nil after retry reset")
+				}
+
+				if task.CompletedAt != nil {
+					t.Error("Task.CompletedAt should be nil after retry reset")
+				}
+
+				// Verify task was re-added to queue
+				s.queuesMux.RLock()
+				queue := s.pendingQueues[task.Priority]
+				s.queuesMux.RUnlock()
+
+				found := false
+				for _, qTask := range queue {
+					if qTask.ID == taskID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					t.Error("Task was not re-added to pending queue for retry")
+				}
+			},
+		},
+		{
+			name:     "task failure exceeding max retries",
+			taskID:   maxRetriesTaskResp.TaskId,
+			result:   nil,
+			error:    "fatal error",
+			wantErr:  true,
+			wantCode: codes.DeadlineExceeded,
+			verify: func(t *testing.T, taskID string) {
+				s.tasksMux.RLock()
+				task := s.tasks[taskID]
+				s.tasksMux.RUnlock()
+
+				if task.Status != FAILED {
+					t.Errorf("Task status = %v, want FAILED", task.Status)
+				}
+
+				if task.RetryCount != 2 {
+					t.Errorf("Task retry count = %v, want 2", task.RetryCount)
+				}
+			},
+		},
+		{
+			name:     "submit result for non-existent task",
+			taskID:   "non-existent-task",
+			result:   []byte("result"),
+			error:    "",
+			wantErr:  true,
+			wantCode: codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &proto.SubmitResultRequest{
+				TaskId: tt.taskID,
+				Result: tt.result,
+				Error:  tt.error,
+			}
+
+			resp, err := s.SubmitResult(ctx, req)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("SubmitResult() expected error, got nil")
+					return
+				}
+
+				st, ok := status.FromError(err)
+				if !ok {
+					t.Error("Error is not a gRPC status error")
+					return
+				}
+
+				if st.Code() != tt.wantCode {
+					t.Errorf("SubmitResult() error code = %v, want %v", st.Code(), tt.wantCode)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("SubmitResult() unexpected error = %v", err)
+					return
+				}
+
+				if resp == nil {
+					t.Fatal("SubmitResult() returned nil response")
+				}
+
+				if !resp.Success {
+					t.Error("SubmitResult() success = false, want true")
+				}
+			}
+
+			if tt.verify != nil {
+				tt.verify(t, tt.taskID)
+			}
+		})
+	}
+}
+
+func TestServer_UtilityFunctions(t *testing.T) {
+	t.Run("appendTaskToQueue", func(t *testing.T) {
+		s := NewServer()
+		defer s.cancel()
+
+		highTask := &Task{ID: "high-1", Priority: HIGH, Status: PENDING}
+		mediumTask := &Task{ID: "medium-1", Priority: MEDIUM, Status: PENDING}
+		lowTask := &Task{ID: "low-1", Priority: LOW, Status: PENDING}
+
+		s.appendTaskToQueue(highTask)
+		s.appendTaskToQueue(mediumTask)
+		s.appendTaskToQueue(lowTask)
+
+		s.queuesMux.RLock()
+		defer s.queuesMux.RUnlock()
+
+		if len(s.pendingQueues[HIGH]) != 1 {
+			t.Errorf("HIGH queue length = %v, want 1", len(s.pendingQueues[HIGH]))
+		}
+
+		if len(s.pendingQueues[MEDIUM]) != 1 {
+			t.Errorf("MEDIUM queue length = %v, want 1", len(s.pendingQueues[MEDIUM]))
+		}
+
+		if len(s.pendingQueues[LOW]) != 1 {
+			t.Errorf("LOW queue length = %v, want 1", len(s.pendingQueues[LOW]))
+		}
+
+		if s.pendingQueues[HIGH][0].ID != "high-1" {
+			t.Errorf("HIGH queue task ID = %v, want 'high-1'", s.pendingQueues[HIGH][0].ID)
+		}
+	})
+
+	t.Run("incrementCurrentLoad", func(t *testing.T) {
+		s := NewServer()
+		defer s.cancel()
+
+		// Create a worker
+		workerID := "test-worker-1"
+		s.workers[workerID] = &worker.Worker{
+			ID:          workerID,
+			Capacity:    10,
+			CurrentLoad: 5,
+		}
+
+		s.incrementCurrentLoad(workerID)
+
+		s.workersMux.RLock()
+		load := s.workers[workerID].CurrentLoad
+		s.workersMux.RUnlock()
+
+		if load != 6 {
+			t.Errorf("Worker current load = %v, want 6", load)
+		}
+
+		// Test with non-existent worker (should not panic)
+		s.incrementCurrentLoad("non-existent")
+	})
+
+	t.Run("decrementCurrentLoad", func(t *testing.T) {
+		s := NewServer()
+		defer s.cancel()
+
+		// Create a worker
+		workerID := "test-worker-2"
+		s.workers[workerID] = &worker.Worker{
+			ID:          workerID,
+			Capacity:    10,
+			CurrentLoad: 5,
+		}
+
+		s.decrementCurrentLoad(workerID)
+
+		s.workersMux.RLock()
+		load := s.workers[workerID].CurrentLoad
+		s.workersMux.RUnlock()
+
+		if load != 4 {
+			t.Errorf("Worker current load = %v, want 4", load)
+		}
+
+		// Test with non-existent worker (should not panic)
+		s.decrementCurrentLoad("non-existent")
+	})
+
+	t.Run("findTask", func(t *testing.T) {
+		s := NewServer()
+		defer s.cancel()
+
+		testTask := &Task{ID: "test-task-1", Type: "test"}
+		s.tasks["test-task-1"] = testTask
+
+		// Test finding existing task
+		found, err := s.findTask("test-task-1")
+		if err != nil {
+			t.Errorf("findTask() unexpected error = %v", err)
+		}
+		if found.ID != "test-task-1" {
+			t.Errorf("findTask() task ID = %v, want 'test-task-1'", found.ID)
+		}
+
+		// Test finding non-existent task
+		_, err = s.findTask("non-existent")
+		if err == nil {
+			t.Error("findTask() expected error for non-existent task, got nil")
+		}
+
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Error("Error is not a gRPC status error")
+		}
+		if st.Code() != codes.NotFound {
+			t.Errorf("findTask() error code = %v, want NotFound", st.Code())
+		}
+	})
+
+	t.Run("findWorker", func(t *testing.T) {
+		s := NewServer()
+		defer s.cancel()
+
+		testWorker := &worker.Worker{ID: "test-worker-1"}
+		s.workers["test-worker-1"] = testWorker
+
+		// Test finding existing worker
+		found, err := s.findWorker("test-worker-1")
+		if err != nil {
+			t.Errorf("findWorker() unexpected error = %v", err)
+		}
+		if found.ID != "test-worker-1" {
+			t.Errorf("findWorker() worker ID = %v, want 'test-worker-1'", found.ID)
+		}
+
+		// Test finding non-existent worker
+		_, err = s.findWorker("non-existent")
+		if err == nil {
+			t.Error("findWorker() expected error for non-existent worker, got nil")
+		}
+
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Error("Error is not a gRPC status error")
+		}
+		if st.Code() != codes.NotFound {
+			t.Errorf("findWorker() error code = %v, want NotFound", st.Code())
+		}
+	})
+}
+
+func TestServer_ConcurrentWorkerOperations(t *testing.T) {
+	s := NewServer()
+	defer s.cancel()
+	ctx := context.Background()
+
+	// Test concurrent worker registrations
+	const numWorkers = 50
+	results := make(chan *proto.RegisterWorkerResponse, numWorkers)
+	errors := make(chan error, numWorkers)
+
+	for i := range numWorkers {
+		go func(idx int) {
+			req := &proto.RegisterWorkerRequest{
+				Worker: &proto.Worker{
+					TaskTypes: []string{"test-task"},
+					Capacity:  10,
+					Metadata: map[string]string{
+						"address": "localhost:8080",
+					},
+				},
+			}
+			resp, err := s.RegisterWorker(ctx, req)
+			if err != nil {
+				errors <- err
+			} else {
+				results <- resp
+			}
+		}(i)
+	}
+
+	// Collect results
+	workerIDs := make(map[string]bool)
+	for range numWorkers {
+		select {
+		case resp := <-results:
+			if workerIDs[resp.WorkerId] {
+				t.Errorf("Duplicate worker ID generated: %s", resp.WorkerId)
+			}
+			workerIDs[resp.WorkerId] = true
+		case err := <-errors:
+			t.Errorf("Concurrent RegisterWorker failed: %v", err)
+		}
+	}
+
+	// Verify all workers were stored
+	s.workersMux.RLock()
+	storedCount := len(s.workers)
+	s.workersMux.RUnlock()
+
+	if storedCount != numWorkers {
+		t.Errorf("Expected %d workers stored, got %d", numWorkers, storedCount)
 	}
 }

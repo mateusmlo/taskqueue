@@ -71,16 +71,22 @@ message GetTaskResultResponse {
 // ============================================
 // WORKER RPCS
 // ============================================
+message Worker {
+    string worker_id = 1;
+    repeated string task_types = 2;
+    int32 capacity = 3;
+    int32 current_load = 4;
+    int32 last_heartbeat = 5;
+    map<string, string> metadata = 6;
+}
+
 message RegisterWorkerRequest {
-  string worker_id = 1;
-  repeated string task_types = 2;
-  int32 capacity = 3;
-  map<string, string> metadata = 4;
+    Worker worker = 1;
 }
 
 message RegisterWorkerResponse {
   bool success = 1;
-  string message = 2;
+  string worker_id = 2;
 }
 
 message HeartbeatRequest {
@@ -90,6 +96,7 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
   bool success = 1;
+  int32 current_load = 2;
 }
 
 message FetchTaskRequest {
@@ -105,11 +112,13 @@ message FetchTaskResponse {
 message SubmitResultRequest {
   string task_id = 1;
   bytes result = 2;
-  optional string error = 3;
+  string error = 3;
 }
 
 message SubmitResultResponse {
   bool success = 1;
+  bytes result = 2;
+  string error = 4;
 }
 
 // ============================================
