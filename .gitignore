@@ -50,3 +50,6 @@ build/
 tmp/
 temp/
 *.tmp
+
+# local test certificates
+cert/
