@@ -7,12 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mateusmlo/taskqueue/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/mateusmlo/taskqueue/internal/worker"
-	"github.com/mateusmlo/taskqueue/proto"
 )
 
 type Priority int
@@ -39,7 +37,7 @@ type Server struct {
 	pendingQueues map[Priority][]*Task
 	queuesMux     sync.RWMutex
 
-	workers    map[string]*worker.Worker
+	workers    map[string]*WorkerInfo
 	workersMux sync.RWMutex
 
 	ctx    context.Context
@@ -73,7 +71,7 @@ func NewServer() *Server {
 	return &Server{
 		tasks:         make(map[string]*Task),
 		pendingQueues: make(map[Priority][]*Task),
-		workers:       make(map[string]*worker.Worker),
+		workers:       make(map[string]*WorkerInfo),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -158,7 +156,7 @@ func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequ
 
 // RegisterWorker handles worker registration requests
 func (s *Server) RegisterWorker(ctx context.Context, req *proto.RegisterWorkerRequest) (*proto.RegisterWorkerResponse, error) {
-	var newWorker worker.Worker
+	var newWorker WorkerInfo
 	newWorker.FromProtoWorker(req.Worker)
 
 	s.workersMux.Lock()
@@ -300,7 +298,7 @@ func (s *Server) findTask(taskID string) (*Task, error) {
 }
 
 // findWorker retrieves a worker by its ID, returning an error if not found
-func (s *Server) findWorker(workerID string) (*worker.Worker, error) {
+func (s *Server) findWorker(workerID string) (*WorkerInfo, error) {
 	s.workersMux.RLock()
 	defer s.workersMux.RUnlock()
 

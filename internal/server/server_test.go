@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mateusmlo/taskqueue/internal/worker"
 	"github.com/mateusmlo/taskqueue/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1247,7 +1246,7 @@ func TestServer_UtilityFunctions(t *testing.T) {
 
 		// Create a worker
 		workerID := "test-worker-1"
-		s.workers[workerID] = &worker.Worker{
+		s.workers[workerID] = &WorkerInfo{
 			ID:          workerID,
 			Capacity:    10,
 			CurrentLoad: 5,
@@ -1273,7 +1272,7 @@ func TestServer_UtilityFunctions(t *testing.T) {
 
 		// Create a worker
 		workerID := "test-worker-2"
-		s.workers[workerID] = &worker.Worker{
+		s.workers[workerID] = &WorkerInfo{
 			ID:          workerID,
 			Capacity:    10,
 			CurrentLoad: 5,
@@ -1328,7 +1327,7 @@ func TestServer_UtilityFunctions(t *testing.T) {
 		s := NewServer()
 		defer s.cancel()
 
-		testWorker := &worker.Worker{ID: "test-worker-1"}
+		testWorker := &WorkerInfo{ID: "test-worker-1"}
 		s.workers["test-worker-1"] = testWorker
 
 		// Test finding existing worker
