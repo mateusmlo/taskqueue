@@ -172,7 +172,7 @@ func TestIncrementDecrementLoadConcurrency(t *testing.T) {
 	done := make(chan bool)
 
 	// Simulate concurrent increments
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		go func() {
 			worker.incrementLoad()
 			done <- true
@@ -180,7 +180,7 @@ func TestIncrementDecrementLoadConcurrency(t *testing.T) {
 	}
 
 	// Wait for all increments
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		<-done
 	}
 
@@ -189,7 +189,7 @@ func TestIncrementDecrementLoadConcurrency(t *testing.T) {
 	}
 
 	// Simulate concurrent decrements
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		go func() {
 			worker.decrementLoad()
 			done <- true
@@ -197,7 +197,7 @@ func TestIncrementDecrementLoadConcurrency(t *testing.T) {
 	}
 
 	// Wait for all decrements
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		<-done
 	}
 
@@ -415,7 +415,7 @@ func TestLoadMutexProtection(t *testing.T) {
 	iterations := 100
 
 	// Concurrent readers
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		go func() {
 			_ = worker.getCurrentLoad()
 			done <- true
@@ -423,7 +423,7 @@ func TestLoadMutexProtection(t *testing.T) {
 	}
 
 	// Concurrent writers (increments)
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		go func() {
 			worker.incrementLoad()
 			done <- true
@@ -431,7 +431,7 @@ func TestLoadMutexProtection(t *testing.T) {
 	}
 
 	// Concurrent writers (decrements)
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		go func() {
 			worker.decrementLoad()
 			done <- true

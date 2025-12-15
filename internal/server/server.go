@@ -151,7 +151,7 @@ func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "task %s not completed yet", req.TaskId)
 	}
 
-	return &proto.GetTaskResultResponse{Task: task.toProtoTask()}, nil
+	return &proto.GetTaskResultResponse{Result: task.Result}, nil
 }
 
 // RegisterWorker handles worker registration requests
