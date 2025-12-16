@@ -404,6 +404,7 @@ func TestServer_GetTaskResult(t *testing.T) {
 	s.tasksMux.Lock()
 	completedTask := s.tasks[submitResp.TaskId]
 	completedTask.Status = COMPLETED
+	completedTask.Result = []byte("task completed successfully")
 	now := time.Now()
 	completedTask.CompletedAt = &now
 	s.tasksMux.Unlock()
@@ -478,16 +479,8 @@ func TestServer_GetTaskResult(t *testing.T) {
 					t.Fatal("GetTaskResult() returned nil response")
 				}
 
-				if resp.Task == nil {
+				if resp.Result == nil {
 					t.Fatal("GetTaskResult() returned nil task")
-				}
-
-				if resp.Task.Id != tt.taskID {
-					t.Errorf("GetTaskResult() task ID = %v, want %v", resp.Task.Id, tt.taskID)
-				}
-
-				if resp.Task.Status != proto.TaskStatus_COMPLETED {
-					t.Errorf("GetTaskResult() task status = %v, want COMPLETED", resp.Task.Status)
 				}
 			}
 		})

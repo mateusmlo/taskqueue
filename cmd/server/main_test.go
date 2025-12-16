@@ -564,13 +564,7 @@ func TestWorkerTaskLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTaskResult failed: %v", err)
 	}
-	if resultResp.Task == nil {
-		t.Fatal("GetTaskResult returned nil task")
-	}
-	if resultResp.Task.Id != taskID {
-		t.Errorf("Result task ID = %v, want %v", resultResp.Task.Id, taskID)
-	}
-	if resultResp.Task.Status != pb.TaskStatus_COMPLETED {
-		t.Errorf("Result task status = %v, want COMPLETED", resultResp.Task.Status)
+	if resultResp.Result == nil {
+		t.Fatal("GetTaskResult returned nil result")
 	}
 }
