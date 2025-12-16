@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ type TaskHandler interface {
 	Handle(ctx context.Context, payload []byte) ([]byte, error)
 }
 
+// NewWorker creates a new Worker instance.
 func NewWorker(serverAddr string, capacity int) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -44,10 +46,12 @@ func NewWorker(serverAddr string, capacity int) *Worker {
 	}
 }
 
+// RegisterHandler registers a task handler for a specific task type.
 func (w *Worker) RegisterHandler(taskType string, handler TaskHandler) {
 	w.handlers[taskType] = handler
 }
 
+// Start connects the worker to the server and begins processing tasks.
 func (w *Worker) Start() error {
 	tcr, err := credentials.NewClientTLSFromFile("./cert/server.crt", "localhost")
 	if err != nil {
@@ -74,6 +78,7 @@ func (w *Worker) Start() error {
 	return nil
 }
 
+// Stop stops the worker and cleans up resources.
 func (w *Worker) Stop() {
 	w.cancel()
 	w.wg.Wait()
@@ -87,6 +92,7 @@ func (w *Worker) Stop() {
 	}
 }
 
+// heartbeatLoop sends periodic heartbeat messages to the server.
 func (w *Worker) heartbeatLoop() {
 	defer w.wg.Done()
 
@@ -107,6 +113,7 @@ func (w *Worker) heartbeatLoop() {
 	}
 }
 
+// fetchLoop continuously fetches tasks from the server and processes them.
 func (w *Worker) fetchLoop() {
 	defer w.wg.Done()
 
@@ -144,6 +151,7 @@ func (w *Worker) fetchLoop() {
 	}
 }
 
+// getTaskHandler returns a function that processes a task using the provided handler.
 func (w *Worker) getTaskHandler(handler TaskHandler) func(task *proto.Task) {
 	return func(task *proto.Task) {
 		defer w.decrementLoad()
@@ -167,6 +175,7 @@ func (w *Worker) getTaskHandler(handler TaskHandler) func(task *proto.Task) {
 	}
 }
 
+// getCurrentLoad safely retrieves the current load of the worker.
 func (w *Worker) getCurrentLoad() int32 {
 	w.loadMux.RLock()
 	defer w.loadMux.RUnlock()
@@ -174,6 +183,7 @@ func (w *Worker) getCurrentLoad() int32 {
 	return int32(w.currentLoad)
 }
 
+// incrementLoad safely increments the current load of the worker.
 func (w *Worker) incrementLoad() {
 	w.loadMux.Lock()
 	defer w.loadMux.Unlock()
@@ -181,6 +191,7 @@ func (w *Worker) incrementLoad() {
 	w.currentLoad++
 }
 
+// decrementLoad safely decrements the current load of the worker.
 func (w *Worker) decrementLoad() {
 	w.loadMux.Lock()
 	defer w.loadMux.Unlock()
@@ -190,6 +201,7 @@ func (w *Worker) decrementLoad() {
 	}
 }
 
+// register registers the worker with the server and obtains a worker ID.
 func (w *Worker) register() error {
 	req := w.buildRegisterRequest()
 
@@ -202,6 +214,7 @@ func (w *Worker) register() error {
 	return nil
 }
 
+// buildRegisterRequest constructs the RegisterWorkerRequest message.
 func (w *Worker) buildRegisterRequest() *proto.RegisterWorkerRequest {
 	taskTypes := make([]string, 0, len(w.handlers))
 	for taskType := range w.handlers {
@@ -219,6 +232,7 @@ func (w *Worker) buildRegisterRequest() *proto.RegisterWorkerRequest {
 	}
 }
 
+// buildFetchTasksRequest constructs the FetchTaskRequest message.
 func (w *Worker) buildFetchTasksRequest() *proto.FetchTaskRequest {
 	taskTypes := make([]string, 0, len(w.handlers))
 	for taskType := range w.handlers {
@@ -231,9 +245,14 @@ func (w *Worker) buildFetchTasksRequest() *proto.FetchTaskRequest {
 	}
 }
 
+// buildHeartbeatRequest constructs the HeartbeatRequest message.
 func (w *Worker) buildHeartbeatRequest() *proto.HeartbeatRequest {
 	return &proto.HeartbeatRequest{
 		WorkerId:    w.id,
 		CurrentLoad: w.getCurrentLoad(),
 	}
+}
+
+func (w *Worker) GetWorkerID() string {
+	return fmt.Sprintf("Worker:%s", w.id)
 }

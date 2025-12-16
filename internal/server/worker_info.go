@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// WorkerInfo tracks a registered worker (server-side only)
+// WorkerInfo tracks a registered worker's information
 type WorkerInfo struct {
 	ID            string
 	Address       string

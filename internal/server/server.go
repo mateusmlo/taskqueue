@@ -132,26 +132,36 @@ func (s *Server) SubmitTask(ctx context.Context, req *proto.SubmitTaskRequest) (
 
 // GetTaskStatus retrieves the status of a task by its ID
 func (s *Server) GetTaskStatus(ctx context.Context, req *proto.GetTaskStatusRequest) (*proto.GetTaskStatusResponse, error) {
-	task, err := s.findTask(req.TaskId)
-	if err != nil {
-		return nil, err
+	s.tasksMux.RLock()
+	task, exists := s.tasks[req.TaskId]
+	if !exists {
+		s.tasksMux.RUnlock()
+		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
 	}
+	taskStatus := task.Status
+	s.tasksMux.RUnlock()
 
-	return &proto.GetTaskStatusResponse{Status: proto.TaskStatus(task.Status)}, nil
+	return &proto.GetTaskStatusResponse{Status: proto.TaskStatus(taskStatus)}, nil
 }
 
 // GetTaskResult retrieves the result of a completed task by its ID
 func (s *Server) GetTaskResult(ctx context.Context, req *proto.GetTaskResultRequest) (*proto.GetTaskResultResponse, error) {
-	task, err := s.findTask(req.TaskId)
-	if err != nil {
-		return nil, err
+	s.tasksMux.RLock()
+	task, exists := s.tasks[req.TaskId]
+	if !exists {
+		s.tasksMux.RUnlock()
+		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
 	}
 
 	if task.Status != COMPLETED {
+		s.tasksMux.RUnlock()
 		return nil, status.Errorf(codes.FailedPrecondition, "task %s not completed yet", req.TaskId)
 	}
 
-	return &proto.GetTaskResultResponse{Task: task.toProtoTask()}, nil
+	result := task.Result
+	s.tasksMux.RUnlock()
+
+	return &proto.GetTaskResultResponse{Result: result}, nil
 }
 
 // RegisterWorker handles worker registration requests
@@ -169,28 +179,33 @@ func (s *Server) RegisterWorker(ctx context.Context, req *proto.RegisterWorkerRe
 
 // Heartbeat processes heartbeat messages from workers
 func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*proto.HeartbeatResponse, error) {
-	worker, err := s.findWorker(req.WorkerId)
-	if err != nil {
-		return nil, err
+	s.workersMux.Lock()
+	worker, exists := s.workers[req.WorkerId]
+	if !exists {
+		s.workersMux.Unlock()
+		return nil, status.Errorf(codes.NotFound, "worker %s not found", req.WorkerId)
 	}
 
 	worker.LastHeartbeat = time.Now()
 	worker.CurrentLoad = int(req.CurrentLoad)
+	currentLoad := worker.CurrentLoad
+	s.workersMux.Unlock()
 
-	return &proto.HeartbeatResponse{Success: true, CurrentLoad: int32(worker.CurrentLoad)}, nil
+	return &proto.HeartbeatResponse{Success: true, CurrentLoad: int32(currentLoad)}, nil
 }
 
 // SubmitResult processes the result submission from workers
 func (s *Server) SubmitResult(ctx context.Context, req *proto.SubmitResultRequest) (*proto.SubmitResultResponse, error) {
-	task, err := s.findTask(req.TaskId)
-	if err != nil {
-		return nil, err
+	s.tasksMux.Lock()
+	task, exists := s.tasks[req.TaskId]
+	if !exists {
+		s.tasksMux.Unlock()
+		return nil, status.Errorf(codes.NotFound, "task %s not found", req.TaskId)
 	}
 
 	now := time.Now()
 	task.CompletedAt = &now
-
-	defer s.decrementCurrentLoad(task.WorkerID)
+	workerID := task.WorkerID
 
 	if req.Error != "" {
 		task.Error = req.Error
@@ -200,30 +215,43 @@ func (s *Server) SubmitResult(ctx context.Context, req *proto.SubmitResultReques
 			task.Status = PENDING
 			task.StartedAt = nil
 			task.CompletedAt = nil
+			s.tasksMux.Unlock()
 
 			s.appendTaskToQueue(task)
+			s.decrementCurrentLoad(workerID)
+
+			return &proto.SubmitResultResponse{Success: true, Result: req.Result}, nil
 		} else {
 			task.Status = FAILED
+			s.tasksMux.Unlock()
 
+			s.decrementCurrentLoad(workerID)
 			return nil, status.Errorf(codes.DeadlineExceeded, "task %s failed after maximum retries: %s", req.TaskId, req.Error)
 		}
 	} else {
 		task.Status = COMPLETED
 		task.Result = req.Result
-	}
+		s.tasksMux.Unlock()
 
-	return &proto.SubmitResultResponse{Success: true, Result: req.Result}, nil
+		s.decrementCurrentLoad(workerID)
+		return &proto.SubmitResultResponse{Success: true, Result: req.Result}, nil
+	}
 }
 
 func (s *Server) FetchTask(ctx context.Context, req *proto.FetchTaskRequest) (*proto.FetchTaskResponse, error) {
-	worker, err := s.findWorker(req.WorkerId)
-	if err != nil {
-		return nil, err
+	s.workersMux.RLock()
+	worker, exists := s.workers[req.WorkerId]
+	if !exists {
+		s.workersMux.RUnlock()
+		return nil, status.Errorf(codes.NotFound, "worker %s not found", req.WorkerId)
 	}
 
 	if worker.CurrentLoad >= worker.Capacity {
+		s.workersMux.RUnlock()
 		return &proto.FetchTaskResponse{HasTask: false}, nil
 	}
+	workerID := worker.ID
+	s.workersMux.RUnlock()
 
 	s.queuesMux.Lock()
 	defer s.queuesMux.Unlock()
@@ -241,10 +269,10 @@ func (s *Server) FetchTask(ctx context.Context, req *proto.FetchTaskRequest) (*p
 				s.tasksMux.Lock()
 				task.Status = RUNNING
 				task.StartedAt = &now
-				task.WorkerID = worker.ID
+				task.WorkerID = workerID
 				s.tasksMux.Unlock()
 
-				s.incrementCurrentLoad(worker.ID)
+				s.incrementCurrentLoad(workerID)
 
 				return &proto.FetchTaskResponse{Task: task.toProtoTask(), HasTask: true}, nil
 			}
